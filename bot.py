@@ -1,3 +1,5 @@
+import imageio_ffmpeg
+FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 import os
 import logging
 import asyncio
@@ -109,6 +111,7 @@ async def download_callback(client, callback_query: CallbackQuery):
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
+                "ffmpeg_location": FFMPEG_PATH,
                 "format": "bestvideo+bestaudio/best",
                 "merge_output_format": "mp4",
                 "outtmpl": out_template,
@@ -118,6 +121,7 @@ async def download_callback(client, callback_query: CallbackQuery):
                 "quiet": True,
                 "no_warnings": True,
                 "noplaylist": True,
+                "ffmpeg_location": FFMPEG_PATH,
                 "format": "bestaudio/best",
                 "outtmpl": out_template,
                 "postprocessors": [{
