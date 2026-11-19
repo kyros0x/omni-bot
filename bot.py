@@ -1,14 +1,15 @@
 import os
 import logging
 import asyncio
+import glob
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import yt_dlp
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-API_ID = "2040"
-API_HASH = "b18441a1ff607e10a989891a5462e627"
+API_ID = int(os.getenv("API_ID", "2040"))
+API_HASH = os.getenv("API_HASH", "b18441a1ff607e10a989891a5462e627")
 BOT_TOKEN = "9101417197:AAFOnGosM_2m8d2Dqgt-ccBI66MgBbfXa3w"
 
 app = Client(
@@ -18,111 +19,161 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-SUPPORTED_PLATFORMS = [
-    "YouTube (Videos/Shorts)", "TikTok (No Watermark)", "Instagram (Reels/Posts)",
-    "Facebook (Videos/Reels)", "Twitter (X)", "WhatsApp Status",
-    "Pinterest", "Kwai", "Threads", "Snapchat",
-    "Dailymotion", "Soundcloud", "Bluesky", "OK.ru"
-]
+# Temporary store for user links: {user_id: url}
+USER_LINKS = {}
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+
+def cleanup_user_files(prefix: str):
+    for f in glob.glob(os.path.join(DOWNLOAD_DIR, f"{prefix}*")):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
+
 
 @app.on_message(filters.command("start"))
 async def start_command(client, message):
-    welcome_text = (
-        f"👋 **Welcome to OmniMedia Ultimate Bot!**\n\n"
-        f"🌟 The world's best All-in-One Media Downloader.\n"
-        f"✨ Supports **Ultra HD Videos, Photos, Reels, & MP3 Audio** with zero watermarks from:\n\n"
-        f"• " + "\n• ".join(SUPPORTED_PLATFORMS) + "\n\n"
-        f"📥 **How to use:**\n"
-        f"Simply send any media link, and get instant download options!"
+    text = (
+        "👋 **Welcome to OmniMedia Ultimate Bot!**\n\n"
+        "Send any public link from **YouTube, TikTok, Instagram, Facebook, X (Twitter), Pinterest, Threads, Dailymotion, SoundCloud**, etc.\n\n"
+        "Choose **Best Video (MP4)** or **MP3 Audio** after sending the link."
     )
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌐 Supported Platforms", callback_data="platforms"),
-         InlineKeyboardButton("⚙️ Bot Status", callback_data="status")]
-    ])
-    await message.reply_text(welcome_text, reply_markup=keyboard)
+    await message.reply_text(text)
 
-@app.on_message(filters.command("help"))
-async def help_command(client, message):
-    await message.reply_text(
-        "🛠 **Help & Guidelines:**\n\n"
-        "1. Send any public media link (YouTube, TikTok, Instagram Reels, Facebook, etc.).\n"
-        "2. The bot will parse the highest Ultra HD streams and formats.\n"
-        "3. Choose MP4, Photos, or MP3 Audio to download instantly.\n\n"
-        "⚡ Powered by Advanced Streaming Engine."
-    )
 
-@app.on_callback_query()
-async def callback_handler(client, callback_query: CallbackQuery):
-    data = callback_query.data
-    if data == "platforms":
-        await callback_query.answer()
-        await callback_query.message.edit_text(
-            "📋 **Supported Platforms:**\n\n" + "\n".join([f"✅ {p}" for p in SUPPORTED_PLATFORMS]),
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Back", callback_data="back_home")]])
-        )
-    elif data == "status":
-        await callback_query.answer("Bot is online and running 24/7! 🚀", show_alert=True)
-    elif data == "back_home":
-        await callback_query.answer()
-        await callback_query.message.edit_text(
-            "👋 **Welcome back to OmniMedia Ultimate Bot!**\nSend any media link to get started.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🌐 Supported Platforms", callback_data="platforms"),
-                 InlineKeyboardButton("⚙️ Bot Status", callback_data="status")]
-            ])
-        )
-
-@app.on_message(filters.text & ~filters.command(["start", "help"]))
-async def process_media(client, message):
+@app.on_message(filters.text & ~filters.command(["start"]))
+async def handle_link(client, message):
     url = message.text.strip()
-    if not url.startswith("http"):
-        await message.reply_text("❌ Please send a valid media URL starting with http:// or https://")
+    if not (url.startswith("http://") or url.startswith("https://")):
+        await message.reply_text("❌ Please send a valid URL starting with http:// or https://")
         return
 
-    status_msg = await message.reply_text("🔍 **Analyzing Link & Extracting Ultra HD Streams...** Please wait.")
+    status = await message.reply_text("🔍 **Checking link info...**")
 
     try:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'format': 'best'
-        }
-
-        def extract_info():
+        def get_info():
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+            }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 return ydl.extract_info(url, download=False)
 
-        info = await asyncio.to_thread(extract_info)
-        title = info.get('title', 'Downloaded Media')
-        duration = info.get('duration_string', 'N/A')
-        uploader = info.get('uploader', 'Unknown Creator')
+        info = await asyncio.to_thread(get_info)
+        title = info.get("title") or "Media"
+        duration = info.get("duration_string") or "N/A"
 
-        keyboard_buttons = [
-            [InlineKeyboardButton("🔥 Download Ultra HD Video (Max)", url=url)],
-            [InlineKeyboardButton("📱 HD 720p / 1080p", url=url),
-             InlineKeyboardButton("🎵 MP3 Audio Only", url=url)],
-            [InlineKeyboardButton("🔗 Open Direct Source Link", url=url)]
-        ]
+        USER_LINKS[message.from_user.id] = url
 
-        reply_markup = InlineKeyboardMarkup(keyboard_buttons)
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 Download Best Video (MP4)", callback_data="dl_video")],
+            [InlineKeyboardButton("🎵 Download Audio (MP3)", callback_data="dl_mp3")]
+        ])
 
-        caption = (
-            f"🎯 **Media Extracted Successfully!**\n\n"
-            f"📌 **Title:** {title}\n"
-            f"👤 **Creator:** {uploader}\n"
+        await status.edit_text(
+            f"📌 **Title:** {title[:120]}\n"
             f"⏱ **Duration:** {duration}\n\n"
-            f"👇 Select your preferred download option below:"
+            f"Select format to download:",
+            reply_markup=buttons
         )
-
-        await status_msg.edit_text(caption, reply_markup=reply_markup)
 
     except Exception as e:
-        await status_msg.edit_text(
-            f"❌ **Failed to process link.**\n\n"
-            f"Reason: `{str(e)[:90]}`\n\n"
-            f"Please ensure the link is public and from a supported platform."
-        )
+        logging.exception("Info extraction error")
+        await status.edit_text(f"❌ **Could not read this link.**\n`{str(e)[:150]}`")
+
+
+@app.on_callback_query(filters.regex("^dl_(video|mp3)$"))
+async def download_callback(client, callback_query: CallbackQuery):
+    mode = callback_query.data.split("_")[1]
+    user_id = callback_query.from_user.id
+    url = USER_LINKS.get(user_id)
+
+    if not url:
+        await callback_query.answer("Link expired. Please send the link again.", show_alert=True)
+        return
+
+    await callback_query.answer("Starting download...")
+    msg = await callback_query.message.edit_text(
+        "⬇️ **Downloading media to server...** Please wait."
+    )
+
+    prefix = f"{user_id}_{callback_query.id}"
+    out_template = os.path.join(DOWNLOAD_DIR, f"{prefix}.%(ext)s")
+
+    try:
+        if mode == "video":
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+                "format": "bestvideo+bestaudio/best",
+                "merge_output_format": "mp4",
+                "outtmpl": out_template,
+            }
+        else:
+            ydl_opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "noplaylist": True,
+                "format": "bestaudio/best",
+                "outtmpl": out_template,
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }],
+            }
+
+        def run_download():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.extract_info(url, download=True)
+
+        await asyncio.to_thread(run_download)
+
+        files = glob.glob(os.path.join(DOWNLOAD_DIR, f"{prefix}*"))
+        if not files:
+            raise FileNotFoundError("Downloaded file not found.")
+
+        file_path = max(files, key=os.path.getsize)
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+
+        # Telegram Bot API standard upload limit is ~50MB unless using a local Bot API server
+        if file_size_mb > 49.5:
+            await msg.edit_text(
+                f"⚠️ **File is too large for standard Telegram Bot upload ({file_size_mb:.1f} MB).**\n"
+                f"Standard Telegram bots are limited to 50 MB per file."
+            )
+            cleanup_user_files(prefix)
+            return
+
+        await msg.edit_text("⬆️ **Uploading to Telegram...**")
+
+        if mode == "video":
+            await client.send_video(
+                chat_id=callback_query.message.chat.id,
+                video=file_path,
+                caption="✅ Downloaded with OmniMedia Bot",
+                supports_streaming=True
+            )
+        else:
+            await client.send_audio(
+                chat_id=callback_query.message.chat.id,
+                audio=file_path,
+                caption="✅ MP3 Audio"
+            )
+
+        await msg.delete()
+
+    except Exception as e:
+        logging.exception("Download/Upload error")
+        await msg.edit_text(f"❌ **Download failed:**\n`{str(e)[:180]}`")
+    finally:
+        cleanup_user_files(prefix)
+
 
 if __name__ == "__main__":
-    print("🤖 OmniMedia Ultimate Bot is running...")
+    print("🤖 OmniMedia Bot started...")
     app.run()
